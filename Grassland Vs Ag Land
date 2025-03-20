@@ -1,0 +1,252 @@
+''' Crop or grassland'''
+
+library(rnaturalearth)
+library(sf)
+library(tidyverse)
+library(cartogram)
+library(ggforce)
+
+
+#Load data
+world <- ne_countries(scale = 110, type = "countries", returnclass = "sf")%>%
+  # Convert WGS84 to projected crs (here Robinson)
+  sf::st_transform(world_ne, crs="ESRI:54030")
+
+data <- read_csv('https://raw.githubusercontent.com/BjnNowak/dorling_map/main/data/FAOSTAT_land_use_2020.csv')
+
+#Cleaning the data
+
+clean <- data%>%
+  select(iso_a3='Area Code (ISO3)',item=Item,surface=Value)%>%
+  # Simplify variable names
+  mutate(item=case_when(
+    item=="Agricultural land"~"total",
+    item=="Arable land"~"crop",
+    item=="Permanent meadows and pastures"~"grass"
+  ))%>%
+  # Pivot from long to wide
+  pivot_wider(names_from=item,values_from=surface)
+
+# Join data to world map
+map <- world%>%
+  left_join(clean)%>%
+  drop_na(total)
+
+#plot
+ggplot(map, aes(fill=total))+
+  geom_sf()
+
+#making dorlim cartogram
+# Making Dorling cartogram based on total agricultural land
+dorl<-cartogram::cartogram_dorling(
+  map, weight='total', k = 5,
+  m_weight = 1, itermax = 1000
+)
+
+# Set colors
+col_world <- "#F2F2F2"
+col_back <- "white"
+
+# Set theme
+theme_custom <- theme_void()+
+  theme(plot.background = element_rect(fill=col_back,color=NA))
+
+ggplot()+
+  # World basemap
+  geom_sf(
+    world,mapping=aes(geometry=geometry),
+    fill=col_world,color=alpha("dimgrey",0.25)
+  )+
+  # Dorling cartogram
+  geom_sf(
+    dorl,mapping=aes(geometry=geometry),
+    fill=alpha("dimgrey",0.75),color=alpha("white",0.2)
+  )+
+  theme_custom
+
+# Compute area and radius for each circus of the cartogram
+dorl<-dorl%>%
+  mutate(
+    # Compute area
+    ar=as.numeric(st_area(dorl)),
+    # Compute radius based on area
+    rad=as.numeric(sqrt(ar/pi))
+  )
+
+# Extract centroids for each circle
+centr <- dorl%>%
+  st_centroid()%>%
+  st_coordinates()
+
+# Combine data
+dorl2 <- tibble(dorl,X=centr[,1],Y=centr[,2])%>%
+  arrange(-total)
+
+ggplot()+
+  # World basemap
+  geom_sf(
+    world,mapping=aes(geometry=geometry),
+    fill=col_world,color=alpha("dimgrey",0.25)
+  )+
+  # Draw Dorling cartogram with geom_circle()
+  ggforce::geom_circle(
+    data = dorl2, aes(x0 = X, y0 = Y, r = rad),
+    fill=alpha("dimgrey",0.75),color=alpha("white",0.2)
+  )+
+  theme_custom
+
+#Add supplimentary variables in cartogram
+dorl2 <- dorl2 %>%
+  mutate(
+    ratio_crop = crop/total,
+    ratio_grass = grass/total
+  )%>%
+  mutate(
+    rad_crop=sqrt(rad*rad*ratio_crop),
+    rad_grass=sqrt(rad*rad*ratio_grass)
+  )
+
+col_crop <- "#FF7D00"
+col_grass <- "#4CB944"
+
+ggplot()+
+  # World basemap
+  geom_sf(
+    world,mapping=aes(geometry=geometry),
+    fill=col_world,color=alpha("dimgrey",0.25)
+  )+
+  # Draw Dorling cartogram with geom_circle()
+  ggforce::geom_circle(
+    data = dorl2, aes(x0 = X, y0 = Y, r = rad),
+    fill=alpha("dimgrey",0.75),color=alpha("white",0.2)
+  )+
+  # Draw circle for crops (or grass)
+  ggforce::geom_circle(
+    data = dorl2, aes(x0 = X, y0 = Y, r = rad_crop),
+    fill=col_crop,color=NA
+  )+
+  theme_custom
+
+circleFun <- function(
+    center=c(0,0),   # center of the circle 
+    diameter=1,      # diameter 
+    npoints=100,     # number of points to draw the circle
+    start=0, end=2   # start point/end point
+){
+  tt <- seq(start*pi, end*pi, length.out=npoints)
+  tb <- tibble(
+    x = center[1] + diameter / 2 * cos(tt), 
+    y = center[2] + diameter / 2 * sin(tt)
+  )
+  return(tb)
+}
+
+# Half circle for crops
+half_crop <- bind_cols(
+  iso_a3 = rep(dorl2$iso_a3[1],100),
+  circleFun(
+    c(dorl2$X[1],dorl2$Y[1]),dorl2$rad_crop[1]*2, start=1.5, end=2.5
+  ))
+
+# Half circle for grass
+half_grass <- bind_cols(
+  iso_a3 = rep(dorl2$iso_a3[1],100),
+  circleFun(
+    c(dorl2$X[1],dorl2$Y[1]),dorl2$rad_grass[1]*2, start=0.5, end=1.5
+  ))
+
+ggplot()+
+  # World basemap
+  geom_sf(
+    world,mapping=aes(geometry=geometry),
+    fill=col_world,color=alpha("dimgrey",0.25)
+  )+
+  # Draw Dorling cartogram with geom_circle()
+  ggforce::geom_circle(
+    data = dorl2, aes(x0 = X, y0 = Y, r = rad),
+    fill=alpha("dimgrey",0.75),color=alpha("white",0.2)
+  )+
+  # Draw half circle for crop with geom_polygon
+  geom_polygon(
+    half_crop,
+    mapping=aes(x,y,group=iso_a3),
+    fill=col_crop,color=NA
+  )+ 
+  # Draw half circle for grass with geom_polygon
+  geom_polygon(
+    half_grass,
+    mapping=aes(x,y,group=iso_a3),
+    fill=col_grass,color=NA
+  )+ 
+  theme_custom
+
+
+
+# Make loop for all countries
+for (i in 2:dim(dorl2)[1]){
+  
+  # Draw for crops
+  temp_crop <- bind_cols(
+    iso_a3 = rep(dorl2$iso_a3[i],100),
+    circleFun(
+      c(dorl2$X[i],dorl2$Y[i]),dorl2$rad_crop[i]*2, start=1.5, end=2.5
+    ))
+  # Draw for grass
+  temp_grass <- bind_cols(
+    iso_a3 = rep(dorl2$iso_a3[i],100),
+    circleFun(
+      c(dorl2$X[i],dorl2$Y[i]),dorl2$rad_grass[i]*2, start=0.5, end=1.5
+    ))
+  
+  half_crop<-half_crop%>%
+    bind_rows(temp_crop)
+  
+  half_grass<-half_grass%>%
+    bind_rows(temp_grass)
+}
+
+# Make map
+mp <- ggplot()+
+  # World basemap
+  geom_sf(
+    world,mapping=aes(geometry=geometry),
+    fill=col_world,color=alpha("dimgrey",0.25)
+  )+
+  # Draw Dorling cartogram with geom_circle()
+  ggforce::geom_circle(
+    data = dorl2, aes(x0 = X, y0 = Y, r = rad),
+    fill=alpha("dimgrey",0.75),color=alpha("white",0.2)
+  )+
+  # Draw half circle for crop with geom_polygon
+  geom_polygon(
+    half_crop,
+    mapping=aes(x,y,group=iso_a3),
+    fill=col_crop,color=NA
+  )+ 
+  # Draw half circle for grass with geom_polygon
+  geom_polygon(
+    half_grass,
+    mapping=aes(x,y,group=iso_a3),
+    fill=col_grass,color=NA
+  )+ 
+  theme_custom
+
+mp
+
+#Add Labels
+# Extract Top5 countries for total agricultural area
+lab <- dorl2 %>%
+  arrange(-total)%>%
+  head(5)
+
+# Add labels to previous map
+mp_with_labs <- mp+
+  geom_text(
+    data=lab,
+    aes(x=X,y=Y,label=name,size=total),
+    color="white"
+  )+
+  scale_size(range=c(2,4))+
+  guides(size='none')
+
+mp_with_labs
