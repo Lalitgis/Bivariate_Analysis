@@ -1,0 +1,83 @@
+'''Evolution of energy consumption in agriculture'''
+# Load pacakges
+library(tidyverse)
+library(ggstream)  
+
+data<-read_csv('https://raw.githubusercontent.com/BjnNowak/TidyTuesday/refs/heads/main/data/energy_harchaoui.csv')     
+
+# Look at first lines
+head(data)
+
+# Make line_plot
+p_line <- ggplot(data,aes(x=year,y=value,color=type))+
+  geom_line()+
+  labs(x="Year",y="Energy (PJ)",color="Item")+
+  theme_light()
+
+p_line
+
+
+# Create custom palette
+pal <- c(
+  "animals" = "#4CB944",
+  "farmers" = "#FF7D00",
+  "others" = "#D6E681",
+  "fertilizers" = "#01BEFE",
+  "fuels" = "#FF006D"
+)
+
+p_line <- p_line+
+  scale_color_manual(values=pal)
+
+p_line
+
+
+# Annotate WWI and WWII
+p_line <- p_line+
+  annotate(
+    geom="rect",
+    xmin=1914,xmax=1918,ymin=-Inf,ymax=Inf,
+    fill="dimgrey",
+    alpha=0.5
+  )+
+  annotate(
+    geom="rect",
+    xmin=1939,xmax=1945,ymin=-Inf,ymax=Inf,
+    fill="dimgrey",
+    alpha=0.5
+  )
+
+p_line
+
+
+'''Streamgraph'''
+# Make stacked area chart
+p_area<-ggplot(
+  data,
+  aes(x=year,y=value,fill=type) # Use 'fill' instead of 'color'
+)+
+  geom_area(color="white",linewidth=0.5)+
+  labs(x="Year",y="Energy (PJ)",fill="Item")+
+  scale_fill_manual(values=pal)+ 
+  theme_light()
+
+p_area
+
+# Make streamgraph:
+p_stream<-ggplot(
+  data%>%filter(year>1899),
+  aes(x=year,y=value,fill=type)
+)+
+  geom_stream(color="white",linewidth=0.5)+
+  scale_x_continuous(breaks=seq(1920,2000,20))+
+  labs(x="Year",fill="Item")+
+  scale_fill_manual(values=pal)+
+  theme_minimal()+
+  # Customize theme
+  theme(
+    panel.grid=element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank()
+  )
+
+p_stream
