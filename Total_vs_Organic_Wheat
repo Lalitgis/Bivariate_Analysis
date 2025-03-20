@@ -1,0 +1,67 @@
+'''Comparison of main production areas for organic farming and conventional farming'''
+# Load packages
+library(tidyverse)
+library(sf)
+
+#This data has been stored in the Frex package created be Benjamin Nowak
+# Load basemap
+hex<-read_sf('https://github.com/BjnNowak/frex_db/raw/main/map/hex_grid.gpkg')
+
+# Make plot
+ggplot(hex)+
+  geom_sf()
+
+# Load data
+# Total crop area
+total_area<-read_csv('https://raw.githubusercontent.com/BjnNowak/frex_db/main/data/crop/crop_distribution.csv')
+# Organic crop area
+organic_area<-read_csv('https://raw.githubusercontent.com/BjnNowak/frex_db/main/data/crop/organic_crop_distribution.csv')
+
+# Merge basemap and data
+total<-hex%>%
+  left_join(total_area)
+
+#Load packages
+library(scico) # For color palette
+'''Before going further, we will make a simple choropleth showing wheat area. 
+The total area under wheat (expressed in km2) is stored in the soft_wheat_area_km2 column.'''
+map_1 <- ggplot(total,aes(fill=soft_wheat_area_km2))+
+  geom_sf()+
+  scale_fill_scico(
+    palette="batlow",
+    na.value = "grey75",
+    direction=1,begin=0,end=0.75
+  )+
+  labs(fill="Total wheat")+
+  theme_void()
+
+map_1
+
+#Point on centroid
+'''We will now prepare the data to plot on the centroid of each hexagon of the map a symbol 
+with size proportional to the soft wheat area under organic farming.
+We will start by extractiing the centroid of each hexagon:'''
+
+# Merge map and data
+organic<-hex%>%
+  left_join(organic_area)%>%
+  # Get centroid
+  st_centroid()
+#Plotting centroids only
+ggplot(organic,aes(size=organic_soft_wheat_area_km2))+
+  geom_sf(pch=21,fill=NA,color=alpha("black",0.5))+
+  scale_size(range=c(1,7))+
+  theme_void()
+
+#Plotting area
+map_2<-map_1+
+  geom_sf(
+    organic,
+    mapping=aes(size=organic_soft_wheat_area_km2, geometry=geom),
+    pch=21,fill=NA,color=alpha("grey80",0.8)
+  )+
+  scale_size(range=c(1,7))+
+  labs(size="Organic wheat")+
+  theme_void()
+
+map_2
