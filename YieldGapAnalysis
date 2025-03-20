@@ -1,0 +1,180 @@
+''' Yield Gap between countries'''
+library(tidyverse)
+library(waffle)   
+# For text customization:
+library(ggtext)
+# The following spatial packages will only be used to assign continents to countries:
+library(rnaturalearth) 
+library(sf)  
+
+'''Average national wheat and corn yields
+for the period 2010 to 2020. have been downloaded from FAOSTAT.'''
+
+data<-read_csv('https://raw.githubusercontent.com/BjnNowak/book/main/data/wheat_maize_2010_2020.csv') 
+
+#Mean yield
+clean<-data%>%
+  # Changing column name to avoid space
+  dplyr::rename(M49 = 'Area Code (M49)')%>%
+  drop_na(Value)%>%
+  group_by(M49, Item)%>%
+  # Mean yield in tons
+  summarize(yield=mean(Value)/10000)%>%
+  ungroup()
+
+head(clean)
+
+'''We’re now going to assign a continent to each country. 
+To do this, we’ll use the world map available in the {rnaturalearth} package, 
+keeping only the attribute table and ignoring the geometry.
+The join will be based on the United Nations codes (column ‘M49’ in our data table, 
+column ‘un_a3’ in the {rnaturalearth} table).'''
+
+wrld <- ne_countries(type = "countries", scale = "small", returnclass = "sf")%>%
+  # Drop geometry and keep only attribute table
+  st_drop_geometry()
+
+clean<-clean%>%
+  # Join by UN code
+  left_join(wrld,by=c('M49'='un_a3'))%>%
+  select(M49,Item,yield,continent)%>%
+  drop_na(continent)
+
+head(clean)
+
+#Make waffle chart for wheat
+clean<-clean%>%
+  mutate(
+    rd=floor(yield),
+    ct=1
+  )%>%
+  group_by(rd, Item, continent)%>%
+  summarize(
+    n=sum(ct)
+  )%>%
+  ungroup()
+
+head(clean)
+
+ggplot(
+  # Keep only data for wheat
+  clean%>%filter(Item=="Wheat"),
+  aes(values=n, fill=continent)
+)+
+  waffle::geom_waffle(
+    n_rows = 4,              # Number of squares in each row
+    color = "white",         # Border color
+    flip = TRUE, na.rm=TRUE
+  )+
+  facet_grid(~rd)+
+  coord_equal()
+'''Make waffle chart for both crops'''
+ggplot(
+  # Keep only data with yield below 10 t
+  clean%>%filter(rd<10),
+  aes(values=n, fill=continent)
+)+
+  waffle::geom_waffle(
+    n_rows = 4,              # Number of squares in each row
+    color = "white",         # Border color
+    flip = TRUE, na.rm=TRUE
+  )+
+  # Add Item in facet_grid
+  facet_grid(Item~rd)+
+  coord_equal()
+
+cpl<-clean%>%
+  # Removing some countries with unrealistic yield for maize
+  filter(rd<14)%>%
+  # Complete all combinations for real continents, but with 0 value 
+  # (this prevents cases from being created during the 2nd application of the function)
+  complete(
+    rd,Item,continent, 
+    fill=list(n=0)
+  )%>%
+  # Add imaginary 'z' continent
+  add_row(continent='z',Item='Wheat',n=0,rd=1)%>%
+  # Complete all combination for the 'z' continente
+  complete(
+    rd,Item,continent, 
+    fill=list(n=1)
+  )
+
+ggplot(
+  cpl, # Use cpl (complete) tibble 
+  aes(values=n, fill=continent)
+)+
+  waffle::geom_waffle(
+    n_rows = 4,              # Number of squares in each row
+    color = "white",         # Border color
+    flip = TRUE, na.rm=TRUE
+  )+
+  # Add Item in facet_grid
+  facet_grid(Item~rd)+
+  coord_equal()
+
+pal_fill <- c(
+  "Africa" = "#FFC43D", "Asia" = "#F0426B", "Europe" = "#5A4FCF",
+  "South America" = "#06D6A0", "North America" = "#059E75",
+  "Oceania" = "#F68EA6",
+  # Set alpha to 0 to hide 'z'
+  'z'=alpha('white',0)
+)
+#Plot customization
+
+pal_color <- c(
+  "Africa" = "white", "Asia" = "white", "Europe" = "white",
+  "South America" = "white", "North America" = "white",
+  "Oceania" = "white",
+  # Set alpha to 0 to hide 'z'
+  'z'=alpha('white',0)
+)
+
+# Order crop names
+cpl$Item <- as.factor(cpl$Item)
+cpl$Item <- fct_relevel(cpl$Item, "Wheat","Maize (corn)")
+
+p1<-ggplot(
+  cpl,
+  aes(values=n,fill=continent,color=continent)
+)+
+  waffle::geom_waffle(
+    n_rows = 3, 
+    flip = TRUE, na.rm=TRUE
+  )+
+  facet_grid(
+    Item~rd, 
+    # Switch both facet position
+    switch="both"
+  )+
+  scale_x_discrete()+
+  scale_fill_manual(values=pal_fill)+
+  scale_color_manual(values=pal_color)+
+  coord_equal()
+
+p1
+
+
+title<-"<b>The Yield Gap</b>"
+sub<-"Each square is a country, colored according to continent:<br><b><span style='color:#FFC43D;'>Africa</span></b>, <b><span style='color:#F0426B;'>Asia</span></b>, <b><span style='color:#5A4FCF;'>Europe</span></b>, <b><span style='color:#059E75;'>Central and North America</span></b>, <b><span style='color:#06D6A0;'>South America</span></b> or <b><span style='color:#F68EA6;'>Oceania</span>. "
+
+p2<-p1+
+  # Hide legend
+  guides(fill='none',color='none')+
+  # Add title and subtitle
+  labs(title=title,subtitle=sub)+
+  theme(
+    # Enable markdown for title and subtitle
+    plot.title=element_markdown(),
+    plot.subtitle=element_markdown(),
+    # "Clean" facets 
+    panel.background=element_rect(fill="white"),
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    strip.background.x = element_rect(fill="white"),
+    strip.background.y = element_rect(fill="dimgrey"),
+    strip.text.y = element_text(color="white")
+  )
+
+p2
