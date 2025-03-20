@@ -1,0 +1,143 @@
+# Load the packages
+
+library(tidyverse)
+library(sf)
+
+#Load basemap
+hex = read_sf('https://github.com/BjnNowak/frex_db/raw/main/map/hex_grid.gpkg')
+
+#Make plot
+ggplot(hex)+
+  geom_sf()
+
+# Load data
+# Human population (per km2)
+human_pop<-read_csv('https://raw.githubusercontent.com/BjnNowak/frex_db/main/data/human/human_pop_density.csv')
+# Farm animal density (per km2)
+herd<-read_csv('https://raw.githubusercontent.com/BjnNowak/frex_db/main/data/herds/herds_density_municipality.csv')
+
+# Join data to map
+data<-hex%>%
+  left_join(human_pop)%>%
+  left_join(herd)
+
+ggplot(data, aes(fill=milk_cow_km2))+
+  geom_sf()
+
+
+'''Prepare the data for bivariate choropleth
+We will now see how we can reproduce the bivariate choropleth map comparing human and cow density
+
+First, fe will create a single column for cow density (combining milk and meat cows).'''
+
+# Prepare the data
+data<-data%>%
+  mutate(cow_km2=milk_cow_km2+meat_cow_km2)
+head(data)
+
+'''In our case, it seems appropriate to set the same thresholds for both variables (but it’s not always like that). To obtain a roughly balanced number of hexagons with each 
+color in the palette, the most conventional way is to set the thresholds using tiertiles'''
+#Using threshold
+quantile(data$human_km2, na.rm=TRUE, probs=c(0.33,0.66))
+
+quantile(data$cow_km2, na.rm=TRUE, probs=c(0.33,0.66))
+
+'''Here, by taking into account both human and cow tiertiles, thresholds can be set at c(25,50)
+
+We will now assign classes to the hexagons according to these thresholds.'''
+
+#Set thereshold
+
+t1<- 25
+t2<- 50
+
+# Set classes for human pop
+data<-data%>% 
+  replace(is.na(.), 0)%>%
+  mutate(cl_A=case_when(
+    human_km2<t1~'A1',
+    human_km2<t2~'A2',
+    TRUE~'A3'
+  )
+  )
+# Set classes for cow density
+data<-data%>% 
+  mutate(cl_B=case_when(
+    cow_km2<t1~'B1',
+    cow_km2<t2~'B2',
+    TRUE~'B3'
+  ))
+#Merge both data
+data<-data%>%
+  mutate(cl=paste0(cl_A,cl_B))
+
+#Bi-variate choropleth map (creating new column (cl))
+p1<-ggplot(data, aes(fill=cl))+
+  geom_sf()
+p1
+
+#Assigning new colors
+library(pals)
+
+pal<-stevens.pinkblue(9)
+
+# Assigning color palette to our combinations:
+pal_bivar<-c(
+  'A1B1'=pal[1],
+  'A1B2'=pal[2],
+  'A1B3'=pal[3],
+  'A2B1'=pal[4],
+  'A2B2'=pal[5],
+  'A2B3'=pal[6],
+  'A3B1'=pal[7],
+  'A3B2'=pal[8],
+  'A3B3'=pal[9]
+)
+
+p2<-p1+
+  scale_fill_manual(values=pal_bivar)+
+  # Hide legend
+  guides(fill='none')+
+  theme_void()
+
+p2
+
+#Creating Legend
+tib<-tibble(
+  var_A = rep(c("A1","A2","A3"),3),
+  var_B = c(rep("B1",3),rep("B2",3),rep("B3",3)),
+  value = paste0(var_A,var_B)
+)
+
+leg_tile<-ggplot(data=tib,aes(x=var_A,y=var_B,fill=value))+
+  geom_tile()+
+  scale_fill_manual(values=pal)+
+  guides(fill='none')+
+  coord_fixed()+
+  labs(x="Human density",y="Animal density")+
+  theme_minimal()+
+  theme(axis.text=element_blank())
+
+leg_tile
+leg_pts<-ggplot(data=tib,aes(x=var_A,y=var_B,fill=value))+
+  geom_point(pch=21,size=60,color="grey90")+
+  scale_fill_manual(values=pal)+
+  guides(fill='none')+
+  coord_fixed()+
+  labs(x="Human density",y="Animal density")+
+  theme_minimal()+
+  theme(axis.text=element_blank())
+
+leg_pts
+
+library(patchwork)
+
+leg_tile+p2
+
+layout <- c(
+  area(t = 8, l = 1, b = 10, r = 2),
+  area(t = 1, l = 1, b = 10, r = 10)
+)
+
+leg_tile+p2+ 
+  plot_layout(design = layout)
