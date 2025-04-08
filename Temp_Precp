@@ -1,0 +1,265 @@
+# packages
+
+install.packages('remotes')
+
+remotes::install_github(
+  'inSileco/rchelsa'
+)
+remotes:: install_github(
+  'chris-prener/biscale'
+)
+
+########### Install other pacakges
+library(pacman)
+pacman::p_load(
+  geodata, tidyverse, sf, terra, 
+  rchelsa, biscale, elevatr, cowplot, 
+  gridGraphics, rayshader
+)
+
+##### Chelsa data
+
+#set working directory
+main_dr <- getwd()
+main_dr
+
+#define a vector of IDs to download
+ids <- c(1, 12) #temp and precp
+
+### Function to download CHELSA DATA
+ download_chelsa_data <- function(id, path){
+   rchelsa::get_chelsea_data(
+     categ =  'clim', type = 'bio',
+     id = id, path = path
+   )
+ }
+
+lapply(ids, download_chelsa_data, path = main_dr)
+######### it might take some time to download 
+#check list
+
+list.files()
+
+## load the raster files
+temp <- terra::rast("CHELSA_bio10_01.tif")
+prec <- terra::rast("CHELSA_bio10_12.tif")
+
+#Average precipitation
+prec_avg <- prec/30 #precp is of 30 years 
+
+#combine avg temp and precp
+# into a single stack raster
+
+temp_precp <- c(temp, prec_avg)
+
+#assign names to each layer in the stack
+names(temp_precp) <- c('temperature', 'precipitation')
+
+
+##Country polygon
+
+country_sf <- geodata::gadm(
+  country = 'NPL', level = 0,
+  path = main_dr
+) |>
+  sf::st_as_sf()
+
+## Crop and resample
+
+#define crs
+target_crs <- 'EPSG:4326'
+
+#crop the input raster to the country's extent and apply a mask
+
+temp_prec_country <- terra::crop(
+  temp_precp, country_sf,
+  mask = TRUE
+)
+
+### Obtain DEM from elevtor and convert to terra spatRaster and crop
+
+dem<- elevatr::get_elev_raster(
+  locations = country_sf, z = 8,
+  clip = 'locations'
+)|>
+  terra::rast()|>
+  terra::crop(country_sf, mask = TRUE)
+
+#RESAMPLE THE RASTER TO MATCH DEM resolution using billiniar interpolation
+
+# ✅ Resample to match DEM resolution
+temp_prec_resampled <- terra::resample(
+  x = temp_prec_country,
+  y = dem,
+  method = 'bilinear'
+)
+
+# ✅ Plot the result
+terra::plot(temp_prec_resampled)
+
+#convert raster to dataframe
+
+temp_prec_df <- as.data.frame(
+  temp_prec_resampled, xy = TRUE
+)
+
+#####Defining breaks, color palettee
+
+breaks<- biscale::bi_class(
+  temp_prec_df, x = temperature,
+  y= precipitation, style = 'fisher',
+  dim = 3
+)
+
+########### defning color palette
+pla <- 'DkBlue'
+
+#defining a custom theme for the map
+
+theme_for_the_win <- function(){
+  theme_minimal()+
+    theme(
+      axis.title = element_blank(),
+      plot.background = element_rect(
+        fill =  'white', color = NA
+      ),
+      plot.title = element_text(
+        color = 'grey10', hjust = .5,
+        face = 'bold', vjust = -1
+      ),
+      plot.subtitle = element_text(
+       hjust = .5,
+       vjust = -1
+    ),
+    plot.caption = element_text(
+      size = 9, color =  'grey20',
+      vjust = 1, hjust = .5
+    ),
+    plot.margin = unit(c(0,0,0,0), 'lines'
+    )
+    )
+}
+
+###### 2D bi-variate map
+
+map<- ggplot(breaks)+
+  geom_raster(
+    aes(
+      x = x, y = y, fill = bi_class
+    ), show.legend = FALSE
+  )+
+  biscale::bi_scale_fill(
+    pal = pla, dim = 3,
+    flip_axes = TRUE, rotate_pal = FALSE
+  )+
+  labs(
+    title = 'NEPAL: Temperature and Precipitation',
+    subtitle = 'Average temperature and precipitation (1981-2010)',
+    caption = "Source:CHELSA | Author: Lalit BC",
+    x = " ", y = ""
+  )+
+  coord_sf()+
+  theme_for_the_win()
+
+#create the legend
+
+legend<- biscale::bi_legend(
+  pal = pla,
+  flip_axes = TRUE,
+  rotate_pal = FALSE,
+  dim = 3,
+  xlab = 'Temperature (0C)',
+  ylab =  'Precipitation (mm)',
+  size = 8
+)
+
+###############combinew the map and legend using cowplot
+
+ full_map <- cowplot::ggdraw()+
+   cowplot::draw_plot(
+     plot = map, x = 0, y = 0,
+     width = 1, height = 1
+   )+
+   
+   cowplot::draw_plot(
+     
+     plot = legend, x = .05, y = .13,
+     width = .25, height = .25
+   )
+
+ ##Display final map
+ 
+ 
+print(full_map)
+
+## save image (Height and w must be in inches)
+ggsave(
+  filename = 'Nepal.png',
+  height = 7, width = 7, dpi = 600,
+  device = 'png', bg = 'white', full_map
+)
+
+################ 3D bi-variate map
+
+# projec and convert dem to df
+
+dem_df <- dem %>% 
+  as.data.frame(xy = TRUE, na.rm = TRUE)
+
+#Rename the third column to 'dem'
+ncol(dem)
+
+colnames(dem_df)[3] <- 'dem'
+
+#########create a terrain map
+dem_map <- ggplot(
+  dem_df, aes(x= x, y= y, fill = dem)
+)+
+  geom_raster()+
+  scale_fill_gradientn(colors = 'white')+
+  guides(fill = 'mone')+
+  labs(
+    title = 'NEPAL: Temperature and Precipitation',
+    subtitle = 'Average temperature and precipitation (1981-2010)',
+    caption = 'Source: CHELSA | Author: Lalit BC'
+  )+
+  coord_sf ()+
+  theme_for_the_win()+
+  theme(legend.position = 'none')
+                
+### Render in rayshader
+rayshader::plot_gg(
+  ggobj = full_map,
+  ggobj_height = dem_map,
+  width =7,
+  height = 7,
+  windowsize = c(600,600),
+  scale = 100,
+  shadow = TRUE,
+  shadow_intensity = 1,
+  phi = 87, theta = 0, zoom = .56,
+  multicore = TRUE
+  )
+
+### xoom out
+
+rayshader::render_camera(zoom = .6)
+
+
+#### lights
+
+url <- "https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/4k/brown_photostudio_02_4k.hdr"
+hdri_file <- basename(url)
+
+####### Render 3D object
+
+rayshader::render_highquality(
+  filename = 'Nepal-bivariate-3d.png',
+  preview = TRUE,
+  light = FALSE,
+  environment_light = hdri_file,
+  rotate_env = 90,
+  parallel = TRUE,
+  width = 2000, height = 2000,
+  interactive = FALSE
+)
